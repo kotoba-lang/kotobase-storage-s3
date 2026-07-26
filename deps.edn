@@ -1,0 +1,7 @@
+{:paths ["src"]
+ :deps {io.github.kotoba-lang/kotobase-storage
+        {:local/root "../kotobase-storage"}}
+ :aliases
+ {:cljs-test {:extra-paths ["test"]
+              :extra-deps {org.clojure/clojurescript
+                           {:mvn/version "1.11.132"}}}}}
