@@ -11,3 +11,6 @@ node_modules/
 
 out/
 .shadow-cljs/
+
+out/
+.shadow-cljs/

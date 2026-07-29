@@ -120,7 +120,40 @@ unless you look. Note also that the four security controls must return
 JVM but Promise-returning here, so a plain `identity` throws from inside
 `put-tx-block!`.
 
-**Still not Cloudflare's production R2.** What this establishes is that
+## Measured against production R2 — and it found a shipped bug
+
+`probe-conditional-put!` and the contract were run against a real bucket
+through `wrangler dev --remote`. Production R2 **does** enforce both
+preconditions and **does** survive the race. The adapter did not:
+
+| build | probe | contract |
+|---|---|---|
+| `:optimizations :simple` | `enforced? true` | 14 checks, race verified |
+| `:optimizations :advanced` | `etag-returned? false` | **4 of 4 concurrent writers all published** |
+
+Same source, same bucket. Closure renamed `(.-etag object)` — externs
+inference cannot type the bucket, which arrives as an untyped parameter —
+so `:etag` came back nil, every ref carried a nil version, and
+`-compare-and-set-ref!` added neither `:if-match` (no version) nor
+`:if-none-match` (the ref exists) and sent an **unconditional PUT**.
+Advanced is what a Workers build ships, and every suite here ran
+unoptimised, so nothing could have caught it.
+
+Two fixes, because the renaming is the trigger and not the defect:
+
+- Property reads go through `goog.object/get` and an `invoke` helper, which
+  survive renaming. `kotobase-storage-d1` already had the same helper.
+- **`-compare-and-set-ref!` now refuses** when an existing ref carries no
+  version, instead of falling through to an unconditional write. A backend
+  claiming `:linearizable-ref` must never write without a precondition,
+  whatever the reason it lacks one. A refusal is an outage; a silent
+  last-writer-wins is corruption.
+
+`test/advanced_r2.cljs` compiles at `:advanced` and pins that the ETag
+survives. Verified in both directions: it fails (exit 1) with the property
+access restored.
+
+**Still not every production surface.** What this establishes is that
 `r2-client` speaks the R2 API correctly and that its claimed profile
 survives contention against an implementation of that API. Whether the
 production service matches its own API implementation is what
