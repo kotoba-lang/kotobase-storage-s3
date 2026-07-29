@@ -68,10 +68,40 @@ step gating a silent failure, and those get skipped.
 ## Test
 
 ```sh
-nbb --classpath "$(clojure -Spath -M:cljs-test)" test/run.cljs
+npm test    # test/run.cljs (mock) + test/r2.cljs (real R2 binding)
 ```
 
-Runs the shared contract — including its concurrent half, which this
-adapter's mock passes — plus the decisions made before any request is sent:
+`test/run.cljs` runs the shared contract against a mock written here to the
+shape `open` expects, plus the decisions made before any request is sent:
 which profile each client shape yields, when `open` refuses, and the probe
 against endpoints that do and do not enforce.
+
+`test/r2.cljs` runs the same contract **through `r2-client`, against a real
+R2Bucket binding** (miniflare). That path had no coverage at all — the mock
+never calls `r2-client`, so the code translating a CAS into
+`bucket.put(key, body, {onlyIf: {etagMatches}})` was untested while being
+the client this adapter recommends. A mock cannot close that gap, because
+the question is whether the R2 API behaves as the adapter assumes.
+
+It found one. `probe-conditional-put!` sent a literal quoted sentinel as
+its wrong ETag; R2's binding **rejects a quoted ETag outright** —
+`Conditional ETag should not be wrapped in quotes` — so the probe threw
+instead of answering, on the client it most needs to answer for. The mock
+had accepted any string. `wrong-etag` now derives the value from the real
+ETag by flipping its hex digits, which preserves whatever quoting and shape
+the endpoint itself produced; when no hex digit exists to flip it reports
+`:enforced? nil :inconclusive :cannot-derive-a-wrong-etag`, because "the
+endpoint ignores preconditions" and "this probe could not ask" are
+different answers.
+
+Both suites carry an oracle that must be rejected, so a green race is
+evidence rather than decoration: for R2 that is `r2-client` with the
+precondition stripped out of the put — the shape a dropped or misspelled
+`onlyIf` key would produce, which R2 ignores silently.
+
+**Still not Cloudflare's production R2.** What this establishes is that
+`r2-client` speaks the R2 API correctly and that its claimed profile
+survives contention against an implementation of that API. Whether the
+production service matches its own API implementation is what
+`probe-conditional-put!` is for, and it has not been run against the real
+endpoint yet.

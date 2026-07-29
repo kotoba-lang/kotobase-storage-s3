@@ -12,11 +12,14 @@ jobs:
         with: { node-version: '22' }
       - uses: DeLaGuardo/setup-clojure@13.0
         with: { cli: latest }
-      - run: npm install -g nbb
+      - run: npm ci
 
       # nbb rather than `cljs.main -re node`: that runner does not
       # propagate the script's exit code, so a failing suite exited 0 and
       # this gate would have been green forever. Checked by breaking a
       # check on purpose.
+      # Two suites. The second runs the contract through `r2-client` against
+      # a real R2Bucket binding -- a path the mock never touches, and the
+      # one that found the probe sending a quoted ETag R2 rejects outright.
       - name: contract + adapter checks
-        run: nbb --classpath "$(clojure -Spath -M:cljs-test)" test/run.cljs
+        run: npm test
