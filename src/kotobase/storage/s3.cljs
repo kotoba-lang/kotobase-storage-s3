@@ -23,7 +23,8 @@
   right already -- it fails closed behind `MERKLE_S3_CONDITIONAL_HEAD` with
   the note \"only for a backend with conditional PutObject\" -- and this is
   that discipline, made executable."
-  (:require [kotobase.storage.core :as storage]
+  (:require [clojure.string :as str]
+            [kotobase.storage.core :as storage]
             [kotobase.storage.s3-sigv4 :as sigv4]))
 
 (def conditional-put-modes
@@ -173,6 +174,34 @@
     (->S3Storage client (clean-prefix prefix)
                  (if linearizable? :linearizable-ref :single-writer-ref))))
 
+(defn wrong-etag
+  "An ETag guaranteed to differ from `etag`, in whatever shape `etag`
+   already has.
+
+  Derived rather than invented, because ETag syntax is not portable across
+  the two clients here. HTTP `If-Match` takes a quoted entity-tag; R2's
+  binding takes the bare value and **rejects a quoted one outright** --
+  `Conditional ETag should not be wrapped in quotes`. So a literal
+  sentinel is wrong for one of them whichever way it is written, and it
+  fails loudly on R2 rather than reporting: the probe throws instead of
+  answering, on the client it most needs to answer for. Flipping the hex
+  digits of the real ETag keeps the quoting, length and shape the endpoint
+  itself produced, and differs in every one of them.
+
+  Found by running the probe against a real R2 binding. The mock this repo
+  tests `S3Storage` against accepted any string, so nothing here could
+  have surfaced it."
+  [etag]
+  (when etag
+    (let [flipped (str/replace (str etag) #"[0-9a-fA-F]"
+                               (fn [d] (if (= d "0") "1" "0")))]
+      (if (= flipped (str etag))
+        ;; No hex digit to flip -- an opaque tag this cannot safely mutate.
+        ;; Say so by returning nil; the caller reports the probe as
+        ;; inconclusive rather than pretending to a result.
+        nil
+        flipped))))
+
 (defn probe-conditional-put!
   "Ask a live endpoint whether it actually enforces preconditions.
 
@@ -202,14 +231,23 @@
              (-> (js/Promise.all
                   #js [(put {:key key :body body :if-none-match "*"})
                        (put {:key key :body body
-                             :if-match "\"kotobase-probe-not-the-etag\""})])
+                             :if-match (wrong-etag etag)})])
                  (.then
                   (fn [[on-existing on-wrong-etag]]
                     (let [checks {:if-none-match-rejected? (nil? on-existing)
                                   :if-match-rejected? (nil? on-wrong-etag)
                                   :etag-returned? (some? etag)}]
-                      {:enforced? (every? true? (vals checks))
-                       :checks checks}))))))))))
+                      (if (nil? (wrong-etag etag))
+                        ;; The If-Match half could not be posed at all. Do
+                        ;; not fold that into `:enforced? false` -- "the
+                        ;; endpoint ignores preconditions" and "this probe
+                        ;; could not ask" are different answers, and only
+                        ;; one of them is about the endpoint.
+                        {:enforced? nil
+                         :inconclusive :cannot-derive-a-wrong-etag
+                         :checks (dissoc checks :if-match-rejected?)}
+                        {:enforced? (every? true? (vals checks))
+                         :checks checks})))))))))))
 
 (defn r2-client
   "Adapt a Cloudflare R2Bucket binding to the S3 client contract.

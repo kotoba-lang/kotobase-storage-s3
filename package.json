@@ -1,0 +1,12 @@
+{
+  "name": "kotobase-storage-s3",
+  "private": true,
+  "description": "Test-only harness deps. miniflare provides a real R2Bucket binding so r2-client is exercised against an R2 API implementation rather than a mock written to match it.",
+  "scripts": {
+    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs"
+  },
+  "devDependencies": {
+    "miniflare": "^4.0.0",
+    "nbb": "^1.4.208"
+  }
+}
