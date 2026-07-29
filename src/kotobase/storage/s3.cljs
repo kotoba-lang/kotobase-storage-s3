@@ -1,7 +1,40 @@
 (ns kotobase.storage.s3
-  "S3-compatible and Cloudflare R2 implementation of kotobase-storage."
+  "S3-compatible and Cloudflare R2 implementation of kotobase-storage.
+
+  **\"S3-compatible\" does not imply a conditional PUT.** The ref CAS here is
+  an ETag precondition, and whether it holds is a property of the endpoint,
+  not of this code:
+
+  - **R2** evaluates `onlyIf.etagMatches` natively. Linearizable.
+  - **AWS S3** supports `If-None-Match: *` and `If-Match` on PutObject.
+    Linearizable, once confirmed for the account/region in use.
+  - **Backblaze B2** has NO conditional write on either its native or its
+    S3-compatible API. A PUT carrying `If-Match` succeeds regardless, so a
+    read-then-write CAS silently loses updates under concurrency.
+
+  This namespace therefore does not decide the profile from the fact that a
+  client was supplied. Each client declares what its endpoint actually
+  enforces, `open` refuses to promote an unverified one, and
+  `probe-conditional-put!` turns \"verified\" into something a deployment
+  runs rather than something a comment asserts.
+
+  An earlier version declared `:linearizable-ref` unconditionally, for any
+  endpoint. The older, production `kotobase-peer` object store had this
+  right already -- it fails closed behind `MERKLE_S3_CONDITIONAL_HEAD` with
+  the note \"only for a backend with conditional PutObject\" -- and this is
+  that discipline, made executable."
   (:require [kotobase.storage.core :as storage]
             [kotobase.storage.s3-sigv4 :as sigv4]))
+
+(def conditional-put-modes
+  "What a client says its endpoint does with `If-Match`/`If-None-Match`.
+
+  `:native` — the store evaluates preconditions (R2 bindings).
+  `:verified` — an HTTP endpoint that `probe-conditional-put!` confirmed.
+  `:unverified` — an HTTP endpoint nobody has checked. The default, because
+  it is the only safe assumption: an endpoint that ignores the header
+  reports success, so guessing wrong is silent."
+  #{:native :verified :unverified})
 
 (defn- clean-prefix [prefix]
   (let [value (or prefix "kotobase")]
@@ -19,7 +52,7 @@
            (= (aget left index) (aget right index)) (recur (inc index))
            :else false))))
 
-(defrecord S3Storage [client prefix]
+(defrecord S3Storage [client prefix ref-profile]
   storage/IBlockStore
   (-put-blocks! [_ blocks]
     (-> (mapv
@@ -88,26 +121,104 @@
 
   storage/IBackendCapabilities
   (-capabilities [_]
-    #{:immutable-blocks :cid-addressed-read :conditional-ref
-      :linearizable-ref :batch-get :batch-put}))
+    (conj #{:immutable-blocks :cid-addressed-read :conditional-ref
+            :batch-get :batch-put}
+          ;; Not a constant. `-compare-and-set-ref!` above is a
+          ;; read-then-conditional-write, which is linearizable exactly
+          ;; when the endpoint honours the precondition and lost-update
+          ;; prone when it does not -- same code, different guarantee.
+          ref-profile)))
+
+(defn conditional-put
+  "What CLIENT declares about its endpoint's preconditions.
+
+  Unmarked clients are `:unverified`. That is the deliberate default:
+  treating an unknown endpoint as linearizable is the assumption whose
+  failure is silent."
+  [client]
+  (let [declared (:conditional-put client)]
+    (if (contains? conditional-put-modes declared) declared :unverified)))
 
 (defn open
   "Open an S3-compatible backend.
 
   CLIENT functions return Promises. `:put-object!` accepts `:if-match` or
-  `:if-none-match` and returns nil on HTTP 409/412."
-  [{:keys [client prefix]}]
+  `:if-none-match` and returns nil on HTTP 409/412.
+
+  The ref profile follows the client's `:conditional-put` marker:
+  `:native`/`:verified` give `:linearizable-ref`, anything else gives
+  `:single-writer-ref` -- which is not a smaller feature but a truthful
+  one, and the conformance suite treats the two differently.
+
+  Pass `:require-linearizable? true` to refuse to open at all against an
+  unverified endpoint. Deployments that put more than one writer on a ref
+  should set it: the alternative is discovering the endpoint's behaviour
+  from a missing commit."
+  [{:keys [client prefix require-linearizable?]}]
   (doseq [operation [:get-object :put-object!]]
     (when-not (ifn? (get client operation))
       (throw (ex-info "S3 storage client is incomplete"
                       {:type :kotobase.storage/invalid-configuration
                        :missing operation}))))
-  (->S3Storage client (clean-prefix prefix)))
+  (let [mode (conditional-put client)
+        linearizable? (contains? #{:native :verified} mode)]
+    (when (and require-linearizable? (not linearizable?))
+      (throw (ex-info
+              (str "refusing to open a linearizable-ref backend on an endpoint "
+                   "whose conditional PUT is " (name mode)
+                   " -- run probe-conditional-put! against it, or drop "
+                   ":require-linearizable? and accept the single-writer profile")
+              {:type :kotobase.storage/unverified-conditional-put
+               :conditional-put mode})))
+    (->S3Storage client (clean-prefix prefix)
+                 (if linearizable? :linearizable-ref :single-writer-ref))))
+
+(defn probe-conditional-put!
+  "Ask a live endpoint whether it actually enforces preconditions.
+
+  -> Promise<{:enforced? bool :checks {...}}>. Writes and leaves one small
+  object under `<prefix>probe/conditional-put`; reusing the same key keeps
+  the probe idempotent rather than littering the bucket.
+
+  Two preconditions that MUST fail are attempted against an object known
+  to exist: `If-None-Match: *` (the object is there) and `If-Match` with a
+  wrong ETag. An endpoint that accepts either is ignoring the header, and
+  the read-then-write CAS above will lose updates on it under concurrency
+  while reporting success.
+
+  This exists because the older production code required an operator to
+  verify conditional PutObject by hand before enabling it, and a manual
+  step that gates a silent failure is a manual step that gets skipped."
+  [{:keys [client prefix]}]
+  (let [key (str (clean-prefix prefix) "probe/conditional-put")
+        body (js/Uint8Array. #js [107 116 98 45 112 114 111 98 101])
+        put (:put-object! client)
+        get* (:get-object client)]
+    (-> (put {:key key :body body})
+        (.then (fn [_] (get* {:key key})))
+        (.then
+         (fn [existing]
+           (let [etag (:etag existing)]
+             (-> (js/Promise.all
+                  #js [(put {:key key :body body :if-none-match "*"})
+                       (put {:key key :body body
+                             :if-match "\"kotobase-probe-not-the-etag\""})])
+                 (.then
+                  (fn [[on-existing on-wrong-etag]]
+                    (let [checks {:if-none-match-rejected? (nil? on-existing)
+                                  :if-match-rejected? (nil? on-wrong-etag)
+                                  :etag-returned? (some? etag)}]
+                      {:enforced? (every? true? (vals checks))
+                       :checks checks}))))))))))
 
 (defn r2-client
-  "Adapt a Cloudflare R2Bucket binding to the S3 client contract."
+  "Adapt a Cloudflare R2Bucket binding to the S3 client contract.
+
+  Marked `:native`: R2 evaluates `onlyIf` itself, so the precondition is
+  the store's and not this code's."
   [bucket]
-  {:get-object
+  {:conditional-put :native
+   :get-object
    (fn [{:keys [key]}]
      (-> (.get bucket key)
          (.then
@@ -133,7 +244,14 @@
 (defn signed-client
   "Build a real S3-compatible HTTP client using AWS Signature Version 4.
 
-  CONFIG requires endpoint, bucket, region, access-key, and secret-key."
+  CONFIG requires endpoint, bucket, region, access-key, and secret-key.
+
+  `:conditional-put` defaults to `:unverified`, because \"speaks the S3
+  API\" and \"evaluates If-Match\" are different claims and this code cannot
+  tell them apart from the outside. AWS S3 supports both preconditions on
+  PutObject; Backblaze B2 supports neither and accepts the PUT anyway.
+  Pass `:conditional-put :verified` only for an endpoint
+  `probe-conditional-put!` has actually answered for."
   [config]
   (let [request
         (fn [method key body headers]
@@ -144,7 +262,8 @@
                (fn [{:keys [url headers]}]
                  (js/fetch
                   url #js {:method method :headers headers :body body})))))]
-    {:get-object
+    {:conditional-put (or (:conditional-put config) :unverified)
+     :get-object
      (fn [{:keys [key]}]
        (-> (request "GET" key nil nil)
            (.then

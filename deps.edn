@@ -1,6 +1,7 @@
 {:paths ["src"]
  :deps {io.github.kotoba-lang/kotobase-storage
-        {:local/root "../kotobase-storage"}}
+        {:git/url "https://github.com/kotoba-lang/kotobase-storage.git"
+         :git/sha "b507198f4a27b71196d8b6e212451fe8edd3393e"}}
  :aliases
  {:cljs-test {:extra-paths ["test"]
               :extra-deps {org.clojure/clojurescript
