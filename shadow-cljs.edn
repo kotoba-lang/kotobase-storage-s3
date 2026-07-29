@@ -8,4 +8,13 @@
   :engine-r2 {:target :node-script
               :output-to "out/engine-r2.js"
               :main engine-r2/-main
-              :compiler-options {:optimizations :none}}}}
+              :compiler-options {:optimizations :none}}
+
+  ;; Advanced, because that is what a Workers build ships and because the
+  ;; only bug this repo has had in production-shaped code was invisible at
+  ;; every other optimisation level.
+  :advanced-r2 {:target :node-script
+                :output-to "out/advanced-r2.js"
+                :main advanced-r2/-main
+                :compiler-options {:optimizations :advanced
+                                   :source-map false}}}}

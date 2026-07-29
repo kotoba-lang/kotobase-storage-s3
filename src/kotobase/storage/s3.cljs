@@ -24,6 +24,7 @@
   the note \"only for a backend with conditional PutObject\" -- and this is
   that discipline, made executable."
   (:require [clojure.string :as str]
+            [goog.object :as gobj]
             [kotobase.storage.core :as storage]
             [kotobase.storage.s3-sigv4 :as sigv4]))
 
@@ -36,6 +37,15 @@
   it is the only safe assumption: an endpoint that ignores the header
   reports success, so guessing wrong is silent."
   #{:native :verified :unverified})
+
+(defn- invoke
+  "Call a JS method by NAME. `(.foo x)` is renamed by `:optimizations
+  :advanced` when externs inference cannot type the receiver, and here it
+  could not -- the R2 bucket arrives as an untyped parameter. Looking the
+  member up as a string survives renaming. `kotobase-storage-d1` carries
+  the same helper for the same reason."
+  [obj method & args]
+  (.apply (gobj/get obj method) obj (to-array args)))
 
 (defn- clean-prefix [prefix]
   (let [value (or prefix "kotobase")]
@@ -102,9 +112,33 @@
     (-> (storage/-read-ref this name)
         (.then
          (fn [current]
-           (if (not= expected (:cid current))
+           (cond
+             (not= expected (:cid current))
              {:published? false :current (:cid current)
               :version (:version current)}
+
+             ;; A ref exists but carries no version, so there is no ETag to
+             ;; condition on. The old `cond->` added `:if-match` only when
+             ;; a version was present and `:if-none-match` only when the
+             ;; ref was absent -- so this case fell through both and sent
+             ;; an UNCONDITIONAL put, silently turning the CAS into a
+             ;; last-writer-wins overwrite.
+             ;;
+             ;; It is not hypothetical and it is not only reachable through
+             ;; a bad provider: advanced compilation renaming `.etag` put
+             ;; production R2 into exactly this state, and the only symptom
+             ;; was four concurrent writers all reporting success. Refusing
+             ;; is the whole point of the profile -- a backend claiming
+             ;; `:linearizable-ref` must never write without a precondition.
+             (and (some? current) (nil? (:version current)))
+             (js/Promise.reject
+              (ex-info (str "refusing an unconditional ref write: the store "
+                            "returned no version for an existing ref, so "
+                            "there is nothing to condition the put on")
+                       {:type :kotobase.storage/missing-ref-version
+                        :ref name}))
+
+             :else
              (-> ((:put-object! client)
                   (cond-> {:key (ref-key prefix name) :body next}
                     (:version current) (assoc :if-match (:version current))
@@ -253,31 +287,45 @@
   "Adapt a Cloudflare R2Bucket binding to the S3 client contract.
 
   Marked `:native`: R2 evaluates `onlyIf` itself, so the precondition is
-  the store's and not this code's."
+  the store's and not this code's.
+
+  **The property reads go through `goog.object/get`, deliberately.**
+  `(.-etag object)` is renamed by `:optimizations :advanced` unless externs
+  inference recognises the object as a JS type, and it did not here: the
+  bucket arrives as an untyped function parameter. Under advanced the
+  accessor compiled to a munged name, `:etag` came back `nil`, and every
+  ref then had a `nil` version -- at which point `-compare-and-set-ref!`
+  sent a PUT with no precondition at all and four concurrent writers all
+  won. Measured against production R2: `:advanced` reported
+  `etag-returned? false` and `4 of 4 concurrent writers all published`,
+  while the identical code at `:optimizations :simple` reported
+  `enforced? true` and passed the race. Production Workers builds use
+  advanced, so this was the shipping configuration and no test had ever
+  run in it."
   [bucket]
   {:conditional-put :native
    :get-object
    (fn [{:keys [key]}]
-     (-> (.get bucket key)
+     (-> (invoke bucket "get" key)
          (.then
           (fn [object]
             (when object
-              (-> (.arrayBuffer object)
+              (-> (invoke object "arrayBuffer")
                   (.then
                    (fn [buffer]
                      {:body (js/Uint8Array. buffer)
-                      :etag (.-etag object)}))))))))
+                      :etag (gobj/get object "etag")}))))))))
    :put-object!
    (fn [{:keys [key body if-match if-none-match]}]
-     (-> (.put bucket key body
-               (when (or if-match if-none-match)
-                 #js {:onlyIf
-                      (if if-match
-                        #js {:etagMatches if-match}
-                        #js {:etagDoesNotMatch if-none-match})}))
+     (-> (invoke bucket "put" key body
+                 (when (or if-match if-none-match)
+                   #js {:onlyIf
+                        (if if-match
+                          #js {:etagMatches if-match}
+                          #js {:etagDoesNotMatch if-none-match})}))
          (.then
           (fn [result]
-            (when result {:etag (.-etag result)})))))})
+            (when result {:etag (gobj/get result "etag")})))))})
 
 (defn signed-client
   "Build a real S3-compatible HTTP client using AWS Signature Version 4.

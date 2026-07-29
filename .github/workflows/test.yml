@@ -24,5 +24,10 @@ jobs:
       # outright. The third runs the engine's Datalog surface over that
       # same binding, because passing the storage contract does not by
       # itself mean transact/q reach the bucket.
-      - name: contract + adapter + engine round trip
+      # Four suites now. The last compiles at :optimizations :advanced --
+      # what a Workers build ships, and the only configuration in which
+      # this repo has had a production bug: Closure renamed the R2 binding's
+      # `.etag`, every ref lost its version, and the CAS degraded to an
+      # unconditional PUT. Every other suite ran unoptimised and passed.
+      - name: contract + adapter + engine + advanced build
         run: npm test

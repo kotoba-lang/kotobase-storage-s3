@@ -3,8 +3,9 @@
   "private": true,
   "description": "Test-only harness deps. miniflare provides a real R2Bucket binding so r2-client is exercised against an R2 API implementation rather than a mock written to match it.",
   "scripts": {
-    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:engine",
-    "test:engine": "shadow-cljs compile engine-r2 && node out/engine-r2.js"
+    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:engine && npm run test:advanced",
+    "test:engine": "shadow-cljs compile engine-r2 && node out/engine-r2.js",
+    "test:advanced": "shadow-cljs release advanced-r2 && node out/advanced-r2.js"
   },
   "devDependencies": {
     "miniflare": "^4.0.0",
