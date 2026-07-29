@@ -8,3 +8,6 @@
 out/
 
 node_modules/
+
+out/
+.shadow-cljs/

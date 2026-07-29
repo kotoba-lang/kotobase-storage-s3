@@ -99,6 +99,27 @@ evidence rather than decoration: for R2 that is `r2-client` with the
 precondition stripped out of the put — the shape a dropped or misspelled
 `onlyIf` key would produce, which R2 ignores silently.
 
+`test/engine_r2.cljs` goes one layer further: `transact` / `q` and a
+**reopened connection** through `kotobase-engine`, over the same R2 binding.
+Passing the storage contract does not by itself mean the Datalog surface
+reaches the bucket — the D1 backend answers queries from a SQL projection,
+and nothing in the storage contract says the engine can serve them from
+blocks alone. It can:
+
+```
+ok  - q over blocks in R2 returned both entities: #{["kawaraban"] ["itonami"]}
+ok  - a REOPENED connection reads it back -- the data is in the bucket, not in the process
+```
+
+That suite is compiled with shadow-cljs rather than run under nbb, and the
+reason is worth stating: nbb's dynamic interop cannot dispatch `.then`
+through kotobase-peer's internals and fails with a stack entirely inside
+nbb, which is indistinguishable from "the engine does not work on R2"
+unless you look. Note also that the four security controls must return
+**Promises** on cljs — kotobase-peer's crypto seam is synchronous on the
+JVM but Promise-returning here, so a plain `identity` throws from inside
+`put-tx-block!`.
+
 **Still not Cloudflare's production R2.** What this establishes is that
 `r2-client` speaks the R2 API correctly and that its claimed profile
 survives contention against an implementation of that API. Whether the
