@@ -5,4 +5,14 @@
  :aliases
  {:cljs-test {:extra-paths ["test"]
               :extra-deps {org.clojure/clojurescript
-                           {:mvn/version "1.11.132"}}}}}
+                           {:mvn/version "1.11.132"}}}
+  ;; The end-to-end Datalog round trip needs the engine and a real
+  ;; ClojureScript compiler. kotobase-storage-git does the same thing for
+  ;; the same reason: a backend proves the query path reaches it rather
+  ;; than assuming it from the storage protocol.
+  :engine-test {:extra-paths ["test"]
+                :extra-deps {io.github.kotoba-lang/kotobase-engine
+                             {:git/url "https://github.com/kotoba-lang/kotobase-engine.git"
+                              :git/sha "06897d42842c2dee82569fcbaad893beef59ec68"}
+                             thheller/shadow-cljs {:mvn/version "3.4.11"}
+                             org.clojure/clojurescript {:mvn/version "1.12.145"}}}}}

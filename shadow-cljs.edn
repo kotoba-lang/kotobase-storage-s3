@@ -1,0 +1,11 @@
+{:deps {:aliases [:engine-test]}
+ :builds
+ {;; nbb runs the other two suites, and cannot run this one: its dynamic
+  ;; interop cannot dispatch `.then` through kotobase-peer's protocol-heavy
+  ;; internals, and fails with a stack entirely inside nbb itself. A real
+  ;; ClojureScript compiler is the difference between "the engine does not
+  ;; work on R2" and "the runner cannot tell".
+  :engine-r2 {:target :node-script
+              :output-to "out/engine-r2.js"
+              :main engine-r2/-main
+              :compiler-options {:optimizations :none}}}}

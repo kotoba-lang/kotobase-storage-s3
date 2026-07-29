@@ -18,8 +18,11 @@ jobs:
       # propagate the script's exit code, so a failing suite exited 0 and
       # this gate would have been green forever. Checked by breaking a
       # check on purpose.
-      # Two suites. The second runs the contract through `r2-client` against
-      # a real R2Bucket binding -- a path the mock never touches, and the
-      # one that found the probe sending a quoted ETag R2 rejects outright.
-      - name: contract + adapter checks
+      # Three suites. The second runs the contract through `r2-client`
+      # against a real R2Bucket binding -- a path the mock never touches,
+      # and the one that found the probe sending a quoted ETag R2 rejects
+      # outright. The third runs the engine's Datalog surface over that
+      # same binding, because passing the storage contract does not by
+      # itself mean transact/q reach the bucket.
+      - name: contract + adapter + engine round trip
         run: npm test
