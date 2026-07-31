@@ -159,3 +159,37 @@ survives contention against an implementation of that API. Whether the
 production service matches its own API implementation is what
 `probe-conditional-put!` is for, and it has not been run against the real
 endpoint yet.
+
+## Qualifying a provider
+
+The adapter's `-compare-and-set-ref!` reads the ref, compares, then issues a
+conditional PUT. Sequentially the read-and-compare answers correctly whether or
+not the provider enforces the precondition — so the shared storage contract
+passes even for a backend that ignores preconditions entirely. **A sequential
+suite cannot qualify a provider for compare-and-set**, because CAS is a
+concurrency property.
+
+Three checks, and they are not substitutes for one another:
+
+```sh
+# 1. the adapter's logic (sequential) — the shared contract
+nbb --classpath "src:test:../kotobase-storage/src" -e "(require '[run])"
+
+# 2. two writers, one ref — deterministic, no threads, no credentials
+nbb --classpath "src:test:../kotobase-storage/src" -e "(require '[race]) (race/main)"
+
+# 3. the provider itself — does it actually honour If-Match / If-None-Match
+S3_ENDPOINT=... S3_BUCKET=... S3_REGION=... \
+S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
+nbb --classpath "src:bin:../kotobase-storage/src" -e "(require '[live-contract]) (live-contract/main)"
+```
+
+Measured (2026-07-31): with a provider that ignores `If-Match`, two writers
+starting from the same observed ref are **both** told they won, and the head
+diverges. The shared contract passes in that case, which is why check 2 and
+check 3 exist.
+
+`test/teeth.cljs` pins that conclusion: it runs the contract against
+conforming and non-conforming providers and asserts the contract cannot tell
+them apart. If that test ever starts failing because the contract got stricter,
+delete it and say so.
