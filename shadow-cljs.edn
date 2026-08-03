@@ -1,4 +1,4 @@
-{:deps {:aliases [:engine-test]}
+{:deps {:aliases [:engine-test :prolly-engine-test]}
  :builds
  {;; nbb runs the other two suites, and cannot run this one: its dynamic
   ;; interop cannot dispatch `.then` through kotobase-peer's protocol-heavy
@@ -9,6 +9,12 @@
               :output-to "out/engine-r2.js"
               :main engine-r2/-main
               :compiler-options {:optimizations :none}}
+
+  :prolly-engine-r2
+  {:target :node-script
+   :output-to "out/prolly-engine-r2.js"
+   :main prolly-engine-r2/-main
+   :compiler-options {:optimizations :none}}
 
   ;; Advanced, because that is what a Workers build ships and because the
   ;; only bug this repo has had in production-shaped code was invisible at
