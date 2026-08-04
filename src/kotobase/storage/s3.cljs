@@ -325,7 +325,26 @@
                           #js {:etagDoesNotMatch if-none-match})}))
          (.then
           (fn [result]
-            (when result {:etag (gobj/get result "etag")})))))})
+            (when result {:etag (gobj/get result "etag")})))))
+   ;; `head` rather than `get`: the large-object plane asks for size, and
+   ;; `get` on a GB object would pull the body into the Worker to answer a
+   ;; question about its length.
+   :head-object
+   (fn [{:keys [key]}]
+     (-> (invoke bucket "head" key)
+         (.then (fn [object]
+                  (when object {:size-bytes (gobj/get object "size")
+                                :etag (gobj/get object "etag")})))))
+   :delete-object!
+   (fn [{:keys [key]}]
+     ;; head-then-delete, because R2's `delete` resolves the same way whether
+     ;; the key was there or not. `deleted?` is what git-annex reads to decide
+     ;; whether a `drop --from` succeeded, so "we issued a delete" is not an
+     ;; answer to it.
+     (-> (invoke bucket "head" key)
+         (.then (fn [object]
+                  (-> (invoke bucket "delete" key)
+                      (.then (fn [_] {:deleted? (some? object)})))))))})
 
 (defn signed-client
   "Build a real S3-compatible HTTP client using AWS Signature Version 4.
@@ -382,4 +401,36 @@
                   :else
                   (js/Promise.reject
                    (ex-info "S3 conditional PUT failed"
-                            {:key key :status (.-status response)}))))))))}))
+                            {:key key :status (.-status response)}))))))))
+     :head-object
+     (fn [{:keys [key]}]
+       (-> (request "HEAD" key nil nil)
+           (.then
+            (fn [response]
+              (cond
+                (= 404 (.-status response)) nil
+                (.-ok response)
+                (let [len (.get (.-headers response) "content-length")]
+                  {:size-bytes (when len (js/parseInt len 10))
+                   :etag (.get (.-headers response) "etag")})
+                :else
+                (js/Promise.reject
+                 (ex-info "S3 HEAD failed"
+                          {:key key :status (.-status response)})))))))
+     :delete-object!
+     (fn [{:keys [key]}]
+       ;; head first: S3 DELETE answers 204 for a key that was never there,
+       ;; so the response alone cannot say whether anything went away -- and
+       ;; that is the bit `git annex drop --from` acts on.
+       (-> (request "HEAD" key nil nil)
+           (.then (fn [head] (.-ok head)))
+           (.then
+            (fn [existed?]
+              (-> (request "DELETE" key nil nil)
+                  (.then
+                   (fn [response]
+                     (if (or (.-ok response) (= 404 (.-status response)))
+                       {:deleted? (boolean existed?)}
+                       (js/Promise.reject
+                        (ex-info "S3 DELETE failed"
+                                 {:key key :status (.-status response)}))))))))))}))

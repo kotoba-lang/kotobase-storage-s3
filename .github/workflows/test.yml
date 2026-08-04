@@ -31,3 +31,13 @@ jobs:
       # unconditional PUT. Every other suite ran unoptimised and passed.
       - name: contract + adapter + engine + advanced build
         run: npm test
+
+      # The large-object plane. Its own suite because the storage contract
+      # above is about blocks and refs, and because the property that
+      # matters here cannot be asserted by a contract at all: this step
+      # signs with real WebCrypto and reads X-Amz-SignedHeaders back out of
+      # the URL S3 would verify against. A provider can report signing
+      # content-length while signing only host, and every grant would be a
+      # blank cheque with a conforming shape.
+      - name: large-object plane
+        run: nbb --classpath "src:test:$(clojure -Spath)" test/object_run.cljs
