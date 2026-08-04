@@ -1,0 +1,8 @@
+{
+  "name": "kotobase-storage-s3-r2-live-bench",
+  "main": "bench/r2-live-worker.mjs",
+  "compatibility_date": "2026-08-04",
+  "r2_buckets": [
+    { "binding": "BENCH_BUCKET", "bucket_name": "kotobase-merkle-lsm" }
+  ]
+}

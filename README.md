@@ -193,3 +193,21 @@ check 3 exist.
 conforming and non-conforming providers and asserts the contract cannot tell
 them apart. If that test ever starts failing because the contract got stricter,
 delete it and say so.
+
+## Live R2 latency and CAS benchmark
+
+The live benchmark writes only unique keys below
+`bench/kotobase-storage-s3/<uuid>/`, runs bounded PUT/HEAD/GET samples and an
+eight-writer ETag race, then deletes every exact key before responding. It is
+disabled unless the remote preview explicitly receives
+`BENCH_LIVE_ENABLED=1`; do not deploy the benchmark configuration.
+
+```sh
+wrangler dev --remote --config wrangler.r2-bench.jsonc --port 8799 \
+  --var BENCH_LIVE_ENABLED:1
+npm run bench:r2-live
+```
+
+`R2_BENCH_SAMPLES`, `R2_BENCH_TRIALS`, `R2_BENCH_SIZES`, and `R2_BENCH_URL`
+override the bounded defaults. The driver fails unless each concurrent race
+has exactly one winner.
