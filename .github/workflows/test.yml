@@ -40,4 +40,4 @@ jobs:
       # content-length while signing only host, and every grant would be a
       # blank cheque with a conforming shape.
       - name: large-object plane
-        run: nbb --classpath "src:test:$(clojure -Spath)" test/object_run.cljs
+        run: npm run test:objects
