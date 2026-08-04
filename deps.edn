@@ -1,7 +1,16 @@
 {:paths ["src"]
  :deps {io.github.kotoba-lang/kotobase-storage
         {:git/url "https://github.com/kotoba-lang/kotobase-storage.git"
-         :git/sha "f41e7bd3dfc8547614c6adc843c9d5fd1290687f"}}
+         :git/sha "d5ac7f6ba5954ebef751f02daedaaedfc62f59bf"}
+        ;; The presigner. `kotoba-lang/sigv4` rather than extending this
+        ;; repo's own `s3-sigv4`: presigned-request already signs arbitrary
+        ;; headers, and the content-length binding the large-object plane
+        ;; depends on IS that feature. A second presigner would be a second
+        ;; place to build the canonical request wrong, and the symptom of
+        ;; that is a 403 with no local reproduction.
+        io.github.kotoba-lang/sigv4
+        {:git/url "https://github.com/kotoba-lang/sigv4.git"
+         :git/sha "610e66cb374162d252210934b0f622ee18bd0a06"}}
  :aliases
  {:cljs-test {:extra-paths ["test"]
               :extra-deps {org.clojure/clojurescript
