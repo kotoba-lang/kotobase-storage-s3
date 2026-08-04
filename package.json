@@ -16,5 +16,8 @@
     "@noble/curves": "^1.7.0",
     "@ipld/dag-cbor": "^9.2.1",
     "multiformats": "^13.3.1"
+  },
+  "overrides": {
+    "undici": "7.29.0"
   }
 }
