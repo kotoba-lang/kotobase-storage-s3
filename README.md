@@ -8,6 +8,46 @@ Block creation is conditional and rejects a CID/bytes collision.
 `signed-client` provides AWS Signature Version 4 HTTP requests; `r2-client`
 accepts a Worker R2 binding.
 
+## Ranged reads, and the one byte that decides a CAR frame
+
+Both clients can now return `[start, end)` for an object, which is what a
+packed block store needs: it has to hold the bytes to parse a CAR frame out
+of them (superproject ADR-2608160100).
+
+The contract is **half-open**. The two clients convert differently, and each
+conversion is the kind that is right in the head and wrong in the file:
+
+| client | wire form | conversion |
+|---|---|---|
+| R2 binding | `{offset, length}` | `length = end - start` |
+| signed HTTP | `Range: bytes=a-b`, **inclusive** | `b = end - 1` |
+
+One byte too many is the first byte of the *next* frame — a read that parses
+and returns the wrong block rather than failing. So both are tested, and
+tested by something that can disagree: the R2 conversion against miniflare's
+R2 implementation (`test/object_r2.cljs`, with an off-by-one client as the
+teeth), and the HTTP header against the request that would leave the process
+(`test/object_run.cljs`).
+
+A `200` answer to a ranged GET means the endpoint **ignored** `Range` and is
+returning the whole object. That is refused rather than sliced locally: it
+would work quietly for small objects and hit the Worker memory limit on a
+large one.
+
+Capabilities follow the client. A binding that can range gets `:range-read`;
+a signing client also gets `:range-grant`, because a URL it hands out honours
+`Range` too — those are different claims and only the first has a protocol
+behind it.
+
+### `signed-client` takes an injected `:fetch`
+
+Not for elegance. The HTTP path had never been executed by any suite — the
+tests drive the R2 binding client and an in-repo mock — and the first test to
+actually call it found `signed-request` throwing on **every** request: its
+`:key` destructuring shadowed `clojure.core/key`, so the object key string
+became the sort function for the canonical headers. Fixed, and the path is
+now runnable offline, which is the reason it stayed broken.
+
 ## "S3-compatible" does not imply a conditional PUT
 
 The ref CAS here is `-read-ref`, compare, conditional PUT. Whether that is a

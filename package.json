@@ -3,11 +3,12 @@
   "private": true,
   "description": "Test-only harness deps. miniflare provides a real R2Bucket binding so r2-client is exercised against an R2 API implementation rather than a mock written to match it.",
   "scripts": {
-    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:engine && npm run test:prolly-engine && npm run test:advanced",
+    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:objects && npm run test:objects-r2 && npm run test:engine && npm run test:prolly-engine && npm run test:advanced",
     "test:engine": "shadow-cljs compile engine-r2 && node out/engine-r2.js",
     "test:prolly-engine": "shadow-cljs compile prolly-engine-r2 && node out/prolly-engine-r2.js",
     "test:advanced": "shadow-cljs release advanced-r2 && node out/advanced-r2.js",
-    "test:objects": "nbb --classpath \"src:test:$(clojure -Spath -M:cljs-test)\" test/object_run.cljs"
+    "test:objects": "nbb --classpath \"src:test:$(clojure -Spath -M:cljs-test)\" test/object_run.cljs",
+    "test:objects-r2": "nbb --classpath \"src:test:$(clojure -Spath -M:cljs-test)\" test/object_r2.cljs"
   },
   "devDependencies": {
     "miniflare": "^4.0.0",

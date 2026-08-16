@@ -117,9 +117,30 @@
                                   :signed-headers (signed-header-list signed-headers)
                                   :expires-at (expires-at now seconds)}))))))
 
+
+  object/IRangeRead
+  (-get-object-range [_ cid start end]
+    (object/assert-object-cid! cid)
+    (if-not (:get-object-range client)
+      ;; A client that cannot range is not a store that ranges. Saying so
+      ;; here keeps `-object-capabilities` honest below.
+      (js/Promise.reject
+       (ex-info "this S3 client has no :get-object-range"
+                {:type :kotobase.storage/range-read-unavailable}))
+      (-> ((:get-object-range client) {:key (object-key prefix cid)
+                                       :start start :end end})
+          (.then (fn [stored] (:body stored))))))
+
   object/IObjectCapabilities
   (-object-capabilities [_]
-    (cond-> #{:large-objects :presigned-transfer :range-read}
+    ;; `:range-grant` is the claim this store could always make: the URL it
+    ;; hands out honours `Range`, and the caller fetches it directly. It used
+    ;; to be spelled `:range-read`, which since 2026-08-16 means something
+    ;; narrower and checkable -- that this store returns the bytes itself.
+    ;; Both are true here when the client can range, and only the second has
+    ;; a protocol behind it.
+    (cond-> #{:large-objects :presigned-transfer :range-grant}
+      (:get-object-range client) (conj :range-read)
       delete? (conj :object-delete))))
 
 ;; ── proxied ─────────────────────────────────────────────────────────────────
@@ -145,9 +166,28 @@
     (-> ((:get-object client) {:key (object-key prefix cid)})
         (.then (fn [stored] (:body stored)))))
 
+
+  object/IRangeRead
+  (-get-object-range [_ cid start end]
+    (object/assert-object-cid! cid)
+    (if-not (:get-object-range client)
+      ;; A client that cannot range is not a store that ranges. Saying so
+      ;; here keeps `-object-capabilities` honest below.
+      (js/Promise.reject
+       (ex-info "this S3 client has no :get-object-range"
+                {:type :kotobase.storage/range-read-unavailable}))
+      (-> ((:get-object-range client) {:key (object-key prefix cid)
+                                       :start start :end end})
+          (.then (fn [stored] (:body stored))))))
+
   object/IObjectCapabilities
   (-object-capabilities [_]
+    ;; No credentials, so no grant to make a claim about -- but an R2
+    ;; binding ranges natively, which is the claim a packed block store
+    ;; needs. This is the deployment the pack plane was designed for: the
+    ;; Worker holds the binding and reads KiB out of a pack.
     (cond-> #{:large-objects :proxied-transfer}
+      (:get-object-range client) (conj :range-read)
       delete? (conj :object-delete))))
 
 ;; ── open ────────────────────────────────────────────────────────────────────
