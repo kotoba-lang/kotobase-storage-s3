@@ -1,7 +1,7 @@
 {:paths ["src"]
  :deps {io.github.kotoba-lang/kotobase-storage
         {:git/url "https://github.com/kotoba-lang/kotobase-storage.git"
-         :git/sha "d5ac7f6ba5954ebef751f02daedaaedfc62f59bf"}
+         :git/sha "143b8da947a15a10982268ca40fff5ac20827f96"}
         ;; The presigner. `kotoba-lang/sigv4` rather than extending this
         ;; repo's own `s3-sigv4`: presigned-request already signs arbitrary
         ;; headers, and the content-length binding the large-object plane

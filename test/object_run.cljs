@@ -12,7 +12,8 @@
   (:require [clojure.string :as str]
             [kotobase.storage.object :as object]
             [kotobase.storage.object-async-contract :as contract]
-            [kotobase.storage.object-s3 :as objs3]))
+            [kotobase.storage.object-s3 :as objs3]
+            [kotobase.storage.s3 :as s3]))
 
 (def ^:private failures (atom 0))
 
@@ -56,6 +57,67 @@
 
 (defn- query-param [url name]
   (.get (.-searchParams (js/URL. url)) name))
+
+
+;; ── the one byte that decides a CAR frame ───────────────────────────────────
+;;
+;; miniflare checks the R2 conversion (offset/length) in test/object_r2.cljs.
+;; The signed HTTP client converts differently -- to an inclusive `Range`
+;; header -- and nothing in this repo speaks HTTP. So `signed-client` takes an
+;; injected `:fetch`: the request that WOULD leave the process is the artefact
+;; under test, and no packet leaves.
+;;
+;; The first version of this check stubbed the global `fetch` instead. It did
+;; not take effect under SCI and the suite made a real request to Backblaze,
+;; which answered 403. A test that reaches the network to prove something
+;; about a header is the wrong shape twice over.
+
+(defn- recording-fetch
+  "A `fetch` that records what it was asked to send and answers `status`."
+  [seen status body]
+  (fn [url opts]
+    (swap! seen conj {:url url :range (get (js->clj (.-headers opts)) "range")})
+    (js/Promise.resolve
+     #js {:status status
+          :ok (< status 400)
+          :arrayBuffer (fn [] (js/Promise.resolve (.-buffer body)))})))
+
+(defn- check-range-header []
+  (expect (= "bytes=0-2" (s3/range-header 0 3))
+          "half-open [0,3) is the inclusive header bytes=0-2")
+  (expect (= "bytes=1-2" (s3/range-header 1 3))
+          "and an interior range keeps its start")
+  (let [seen (atom [])
+        store (objs3/open-objects
+               {:client (s3/signed-client
+                         (assoc creds :fetch (recording-fetch
+                                              seen 206
+                                              (js/Uint8Array. #js [1 2 3]))))})]
+    (-> (object/-get-object-range store cid 0 3)
+        (.then (fn [body]
+                 (expect (= "bytes=0-2" (:range (first @seen)))
+                         (str "the header that would leave the process is "
+                              "bytes=0-2 -- got " (pr-str (:range (first @seen)))))
+                 (expect (= [1 2 3] (vec body)) "and the 206 body comes back")
+                 ;; A 200 means the endpoint ignored Range entirely.
+                 (let [ignored (objs3/open-objects
+                                {:client (s3/signed-client
+                                          (assoc creds :fetch
+                                                 (recording-fetch
+                                                  (atom []) 200
+                                                  (js/Uint8Array. #js [1 2 3]))))})]
+                   (-> (object/-get-object-range ignored cid 0 3)
+                       (.then (fn [_] false))
+                       (.catch (fn [e]
+                                 (= :kotobase.storage/range-not-honoured
+                                    (:type (ex-data e)))))))))
+        (.then (fn [refused?]
+                 (expect refused?
+                         "a 200 answer to a ranged GET is refused rather than
+                          sliced locally -- the endpoint ignored Range, and on
+                          a GB object that is the Worker memory limit")))
+        (.catch (fn [e]
+                  (expect false (str "range header check threw: " e)))))))
 
 (defn -main [& _]
   (-> (contract/verify (objs3/open-objects {:client (proxied-client)}))
@@ -101,6 +163,8 @@
                             (catch :default _ true))
                        "require-presigned? refuses to open on a client that
                         cannot sign, instead of silently proxying GB objects")))
+
+      (.then (fn [_] (check-range-header)))
 
       (.then (fn [_]
                (if (zero? @failures)

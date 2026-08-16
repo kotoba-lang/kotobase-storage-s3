@@ -315,6 +315,19 @@
                    (fn [buffer]
                      {:body (js/Uint8Array. buffer)
                       :etag (gobj/get object "etag")}))))))))
+   ;; R2 takes an OFFSET and a LENGTH, the contract takes [start, end).
+   ;; Two representations of the same interval, and the conversion is one
+   ;; subtraction -- which is exactly the kind of arithmetic that is right
+   ;; in the head and wrong in the file, so it happens here, once.
+   :get-object-range
+   (fn [{:keys [key start end]}]
+     (-> (invoke bucket "get" key
+                 #js {:range #js {:offset start :length (- end start)}})
+         (.then
+          (fn [object]
+            (when object
+              (-> (invoke object "arrayBuffer")
+                  (.then (fn [buffer] {:body (js/Uint8Array. buffer)}))))))))
    :put-object!
    (fn [{:keys [key body if-match if-none-match]}]
      (-> (invoke bucket "put" key body
@@ -346,6 +359,16 @@
                   (-> (invoke bucket "delete" key)
                       (.then (fn [_] {:deleted? (some? object)})))))))})
 
+(defn range-header
+  "The HTTP `Range` value for the half-open interval `[start, end)`.
+
+  Inclusive at both ends on the wire, half-open in the contract, so the
+  whole conversion is `end - 1`. One byte too many is the first byte of the
+  next CAR frame inside a pack — a read that parses and returns the wrong
+  block rather than failing."
+  [start end]
+  (str "bytes=" start "-" (dec end)))
+
 (defn signed-client
   "Build a real S3-compatible HTTP client using AWS Signature Version 4.
 
@@ -358,14 +381,22 @@
   Pass `:conditional-put :verified` only for an endpoint
   `probe-conditional-put!` has actually answered for."
   [config]
-  (let [request
+  (let [;; Injectable so the HTTP path is testable without a network and
+        ;; without reaching for a global. It had never been exercised: the
+        ;; suites drive the R2 binding client and an in-repo mock, and the
+        ;; first test to actually call this found `signed-request` throwing
+        ;; on every request (a `key` destructuring shadowing
+        ;; `clojure.core/key`). A path with no way to run it offline is a
+        ;; path nobody runs.
+        do-fetch (or (:fetch config) (fn [url opts] (js/fetch url opts)))
+        request
         (fn [method key body headers]
           (-> (sigv4/signed-request
                (merge config {:method method :key key
                               :body body :headers headers}))
               (.then
                (fn [{:keys [url headers]}]
-                 (js/fetch
+                 (do-fetch
                   url #js {:method method :headers headers :body body})))))]
     {:conditional-put (or (:conditional-put config) :unverified)
      :get-object
@@ -385,6 +416,34 @@
                 (js/Promise.reject
                  (ex-info "S3 GET failed"
                           {:key key :status (.-status response)})))))))
+     ;; HTTP `Range` is INCLUSIVE at both ends; the contract is half-open.
+     ;; `end - 1` is the whole conversion, and getting it wrong reads one
+     ;; byte too many -- which inside a CAR pack is the first byte of the
+     ;; next frame, i.e. a parse that succeeds and returns the wrong block.
+     :get-object-range
+     (fn [{:keys [key start end]}]
+       (-> (request "GET" key nil {"range" (range-header start end)})
+           (.then
+            (fn [response]
+              (cond
+                (= 404 (.-status response)) nil
+                ;; 206 is the answer to a Range request. A 200 means the
+                ;; endpoint IGNORED the header and is handing back the whole
+                ;; object -- which would silently work for small objects and
+                ;; blow up a Worker on a large one, so it is refused rather
+                ;; than sliced locally.
+                (= 200 (.-status response))
+                (js/Promise.reject
+                 (ex-info "S3 endpoint ignored Range and returned the whole object"
+                          {:type :kotobase.storage/range-not-honoured
+                           :key key :start start :end end}))
+                (.-ok response)
+                (-> (.arrayBuffer response)
+                    (.then (fn [buffer] {:body (js/Uint8Array. buffer)})))
+                :else
+                (js/Promise.reject
+                 (ex-info "S3 ranged GET failed"
+                          {:key key :status (.-status response)}))))))) 
      :put-object!
      (fn [{:keys [key body if-match if-none-match]}]
        (let [headers (cond

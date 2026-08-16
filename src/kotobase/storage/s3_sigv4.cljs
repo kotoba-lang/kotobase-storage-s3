@@ -39,10 +39,20 @@
        (str/join "/" (map encode-part (str/split key #"/")))))
 
 (defn signed-request
+  "Sign an S3 request. `:key` is the object key.
+
+  It is bound as `object-key` rather than `key` because `key` is
+  `clojure.core/key`, which this function needs three lines later to sort and
+  name the canonical headers. Destructured as `key`, the object key — a
+  string — became the sort function, and every call through here threw
+  `a.call is not a function` before a single byte left the process. Nothing
+  caught it: the suites exercise the R2 binding client and an in-repo mock,
+  and this is the other client."
   [{:keys [endpoint bucket region access-key secret-key
-           method key body headers]}]
+           method body headers]
+    object-key :key}]
   (let [endpoint (str/replace endpoint #"/+$" "")
-        path (object-path bucket key)
+        path (object-path bucket object-key)
         host (.-host (js/URL. endpoint))
         iso (.toISOString (js/Date.))
         date (.replace iso (js/RegExp. "[:-]|\\.\\d{3}" "g") "")
