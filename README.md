@@ -29,6 +29,35 @@ R2 implementation (`test/object_r2.cljs`, with an off-by-one client as the
 teeth), and the HTTP header against the request that would leave the process
 (`test/object_run.cljs`).
 
+### Measured against a real endpoint, once
+
+miniflare implements the R2 API and the injected-fetch test checks the header
+that would leave the process — neither is an endpoint. Two things about the
+signed path had therefore never met a real server: whether SigV4 with `range`
+among the signed headers is accepted at all rather than 403ing on
+canonicalisation, and whether the endpoint returns exactly the bytes asked
+for.
+
+`test/b2_range_probe.cljs` answers both. It packs a real CARv2, PUTs it,
+ranges one frame back out, checks the returned bytes **parse as that frame**
+— a one-byte overshoot still parses, as the wrong block — and deletes the
+object.
+
+Measured 2026-08-16 against Backblaze B2 (`s3.us-west-004.backblazeb2.com`):
+`Range: bytes=175-227` returned exactly 53 bytes, parsing as the requested
+frame with byte-identical contents. **AWS S3 proper has not been probed**;
+"S3-compatible" is not one behaviour, which is the same reason
+`:conditional-put` defaults to `:unverified` here.
+
+It is an operator-run probe, not a gate: it needs credentials (Keychain
+service `b2:ai-gftd-datasets`, resolved by exact name — never enumerated)
+and a network, and a fleet node has neither. Same shape as
+`probe-conditional-put!`, and for the same reason.
+
+```bash
+nbb --classpath "src:<io-ipld-car>/src:$(clojure -Spath -M:cljs-test)"     test/b2_range_probe.cljs
+```
+
 A `200` answer to a ranged GET means the endpoint **ignored** `Range` and is
 returning the whole object. That is refused rather than sliced locally: it
 would work quietly for small objects and hit the Worker memory limit on a
