@@ -1,4 +1,4 @@
-{:deps {:aliases [:engine-test :prolly-engine-test :bench]}
+{:deps {:aliases [:engine-test :prolly-engine-test]}
  :builds
  {;; nbb runs the other two suites, and cannot run this one: its dynamic
   ;; interop cannot dispatch `.then` through kotobase-peer's protocol-heavy
