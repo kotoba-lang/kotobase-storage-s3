@@ -3,7 +3,10 @@
   "private": true,
   "description": "Test-only harness deps. miniflare provides a real R2Bucket binding so r2-client is exercised against an R2 API implementation rather than a mock written to match it.",
   "scripts": {
-    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:objects && npm run test:objects-r2 && npm run test:engine && npm run test:prolly-engine && npm run test:advanced",
+    "test": "nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/run.cljs && nbb --classpath \"$(clojure -Spath -M:cljs-test)\" test/r2.cljs && npm run test:objects && npm run test:objects-r2 && npm run test:engine && npm run test:prolly-engine && npm run test:advanced && npm run test:bench-driver && npm run test:bench-worker",
+    "test:bench-driver": "nbb --classpath test test/r2_live_bench_driver.cljs",
+    "test:bench-worker": "nbb --classpath test test/r2_live_worker_guards.cljs",
+    "bench:r2-live": "nbb --classpath test -m r2-live-bench",
     "test:engine": "shadow-cljs compile engine-r2 && node out/engine-r2.js",
     "test:prolly-engine": "shadow-cljs compile prolly-engine-r2 && node out/prolly-engine-r2.js",
     "test:advanced": "shadow-cljs release advanced-r2 && node out/advanced-r2.js",
