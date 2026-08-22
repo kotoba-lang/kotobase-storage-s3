@@ -12,7 +12,12 @@
         {:git/url "https://github.com/kotoba-lang/sigv4.git"
          :git/sha "610e66cb374162d252210934b0f622ee18bd0a06"}}
  :aliases
- {:cljs-test {:extra-paths ["test"]
+ {;; bench/ holds the live R2 benchmark: the worker (compiled by shadow-cljs
+  ;; :r2-live-worker) and the driver (run by nbb). Neither is on the default
+  ;; path -- the benchmark needs a real bucket and is never part of `npm test`.
+  ;; Its FAILURE DISCRIMINATION is, via test/r2_live_bench_driver.cljs.
+  :bench {:extra-paths ["bench"]}
+  :cljs-test {:extra-paths ["test"]
               :extra-deps {org.clojure/clojurescript
                            {:mvn/version "1.11.132"}}}
   ;; The end-to-end Datalog round trip needs the engine and a real
